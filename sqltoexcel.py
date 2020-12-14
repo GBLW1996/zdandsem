@@ -1,5 +1,4 @@
 import time
-
 import pymysql
 import xlrd
 import os
@@ -10,8 +9,9 @@ import re
 
 
 class CompareTable(object):
-    def __init__(self, get_date):
-        self.get_date = get_date
+    def __init__(self, get_date_from, get_date_to):
+        self.get_date_from = get_date_from
+        self.get_date_to = get_date_to
         self.db = pymysql.connect(host='rr-bp1k48go5ks7gky746o.mysql.rds.aliyuncs.com', user='downer',
                                   password='baizhucc', database='downer', port=3306)
         self.cursor = self.db.cursor()
@@ -20,8 +20,8 @@ class CompareTable(object):
     def get_compare(self):
         sql = "SELECT top.*, ta.appname AS apper, SUM(top.hits) AS allhits FROM (SELECT * FROM storage_top WHERE " \
               "1 = 1 and `day` >='{}' and `day` <='{}') AS top LEFT JOIN tb_app AS ta ON ta.appid " \
-              "= top.appid WHERE (ta.appname like '搜狗%' or ta.appname like '360%' or ta.appname like '百度') and 1 " \
-              "= 1 GROUP BY top.appid, top.sid ORDER BY top.`day` ASC, top.hits DESC".format(self.get_date, self.get_date)
+              "= top.appid WHERE (ta.appname like '搜狗%' or ta.appname like '360%' or ta.appname like '百度%') and 1 " \
+              "= 1 GROUP BY top.appid, top.sid ORDER BY top.`day` ASC, top.hits DESC".format(self.get_date_from, self.get_date_to)
         self.db.ping(reconnect=True)
         self.cursor.execute(sql)
         res_sem = self.cursor.fetchall()
@@ -40,7 +40,7 @@ class CompareTable(object):
         sql1 = "SELECT top.*, ta.appname AS apper, SUM(top.hits) AS allhits FROM (SELECT * FROM storage_top WHERE " \
                "1 = 1 AND `day` >='{}' AND `day` <='{}') AS top LEFT JOIN tb_app AS ta ON ta.appid = " \
                "top.appid WHERE (LEFT(ta.appname,3)<>'360' AND LEFT(ta.appname,2)<>'搜狗' AND LEFT(ta.appname,2)<>'" \
-               "百度') AND 1 = 1 GROUP BY top.appid, top.sid ORDER BY top.`day` ASC, top.hits DESC".format(self.get_date, self.get_date)
+               "百度') AND 1 = 1 GROUP BY top.appid, top.sid ORDER BY top.`day` ASC, top.hits DESC".format(self.get_date_from, self.get_date_to)
         self.db.ping(reconnect=True)
         self.cursor.execute(sql1)
         res_zd = self.cursor.fetchall()
@@ -60,10 +60,12 @@ class CompareTable(object):
         for i in rs_list1:
             if i[-1] > 100.0:
                 rs_list2.append(i)
-        rs_list3 = []  # 词相同但点击小于100的
+        rs_list3 = []  # 词相似但点击小于100的
         for i in rs_list:
             for v in rs_list2:
-                if (v[3] in i[3] or i[3] in v[3]) and i[-1] < 100:
+                if ((v[3] in i[3] or i[3] in v[3]) and (i[-2].lower() == v[-2].lower())) and i[-1] < 100:
+                # if (v[3] in i[3] or i[3] in v[3]) and i[-1] < 100:
+                # if (((v[3] in i[3]) and (i[-2].lower() == v[-2].lower()) or (i[3] in v[3])) and (i[-2].lower() == v[-2].lower())) and i[-1] < 100:
                     rs_list3.append(i)
         rs_list4 = []  # 词相同或类似但点击小于100的去重后
         for item in rs_list3:
@@ -101,108 +103,78 @@ class CompareTable(object):
 
     def write_excel(self):
         sem_res, zd_res, cp_res, zd_h_res = self.get_compare()
-        workbook_zd = xlwt.Workbook(encoding='utf-8')
-        workbook_sem = xlwt.Workbook(encoding='utf-8')
-        workbook_res = xlwt.Workbook(encoding='utf-8')
-        workbook_h_res = xlwt.Workbook(encoding='utf-8')
-        worksheet = workbook_zd.add_sheet(u'站点', cell_overwrite_ok=True)
-        worksheet_sem = workbook_sem.add_sheet(u'营销', cell_overwrite_ok=True)
-        worksheet_res = workbook_res.add_sheet(u'营销类似词且数量小于100', cell_overwrite_ok=True)
-        worksheet_h_res = workbook_h_res.add_sheet(u'站点100以上营销没有的词', cell_overwrite_ok=True)
+        self.write_func(sem_res, '营销.xls', '营销')
+        # self.write_func(zd_res, '站点.xls', '站点')
+        self.write_func(cp_res, '类似词营销量级低于100.xls', '营销类似词且数量小于100')
+        self.write_func(zd_h_res, '站点100以上营销没有的词.xls', '站点100以上营销没有的词')
+
+    def write_func(self, exc_list, book_name, sheet_name):
+        workbook = xlwt.Workbook(encoding='utf-8')
+        worksheet = workbook.add_sheet(u'{}'.format(sheet_name), cell_overwrite_ok=True)
         list_title = ['日期', '渠道号', '资源id', '资源名称', '扩展名', '次数']
         for i in list_title:
             worksheet.write(0, list_title.index(i), i)
         i = 0
-        for data in zd_res:
+        for data in exc_list:
             for j in range(len(data)):
-                worksheet.write(i+1, j, data[j])
+                worksheet.write(i + 1, j, data[j])
             i = i + 1
         """ 
         设置单元格高度
         worksheet.row(0).height_mismatch = True
         worksheet.row(0).height = 20 * 30
         """
-        # 设置单元格宽度
         worksheet.col(0).width = 256 * 16  # 一字节宽度*字节数
         worksheet.col(1).width = 256 * 25
         worksheet.col(3).width = 256 * 40
-        workbook_zd.save(self.desk_top + '\站点.xls')
-        for i in list_title:
-            worksheet_sem.write(0, list_title.index(i), i)
-        v = 0
-        for data in sem_res:
-            for j in range(len(data)):
-                worksheet_sem.write(v + 1, j, data[j])
-            v = v + 1
-        """ 
-        设置单元格高度
-        worksheet.row(0).height_mismatch = True
-        worksheet.row(0).height = 20 * 30
-        """
-        # 设置单元格宽度
-        worksheet_sem.col(0).width = 256 * 16  # 一字节宽度*字节数
-        worksheet_sem.col(1).width = 256 * 25
-        worksheet_sem.col(3).width = 256 * 40
-        workbook_sem.save(self.desk_top + '\营销.xls')
-        for i in list_title:
-            worksheet_res.write(0, list_title.index(i), i)
-        i = 0
-        for data in cp_res:
-            for j in range(len(data)):
-                worksheet_res.write(i+1, j, data[j])
-            i = i + 1
-        """ 
-        设置单元格高度
-        worksheet.row(0).height_mismatch = True
-        worksheet.row(0).height = 20 * 30
-        """
-        # 设置单元格宽度
-        worksheet_res.col(0).width = 256 * 16  # 一字节宽度*字节数
-        worksheet_res.col(1).width = 256 * 25
-        worksheet_res.col(3).width = 256 * 40
-        workbook_res.save(self.desk_top + '\类似词营销量级低于100.xls')
-        for i in list_title:
-            worksheet_h_res.write(0, list_title.index(i), i)
-        i = 0
-        for data in zd_h_res:
-            for j in range(len(data)):
-                worksheet_h_res.write(i+1, j, data[j])
-            i = i + 1
-        """ 
-        设置单元格高度
-        worksheet.row(0).height_mismatch = True
-        worksheet.row(0).height = 20 * 30
-        """
-        # 设置单元格宽度
-        worksheet_h_res.col(0).width = 256 * 16  # 一字节宽度*字节数
-        worksheet_h_res.col(1).width = 256 * 25
-        worksheet_h_res.col(3).width = 256 * 40
-        workbook_h_res.save(self.desk_top + '\站点100以上营销没有的词.xls')
+        workbook.save(self.desk_top + '\{}'.format(book_name))
         # dataframe_zd = pandas.DataFrame(self.get_compare())  # 用pandas写
         # dataframe_zd.to_excel(self.desk_top + '\站点.xls', sheet_name='站点表')
 
 
 if __name__ == "__main__":
-    get_date = ''
-    while True:
-        get_date = input('请输入要同步的日期，格式参考：1996-09-18\n')
+    # get_date_from = input('请输入要同步的开始日期，格式参考：1996-09-18\n')  # 起始日期
+    # get_date_to = input('请输入要同步的结束日期，格式参考：1996-09-18\n')  # 结束日期
+    # print('同步中，稍等...')
+    get_date_from = ''
+    get_date_to = ''
+
+    def judge_date(get_date):
         result1 = re.findall('^\d{4}-\d{2}-\d{2}$', get_date)
         try:
             date_p = datetime.datetime.strptime(get_date, '%Y-%m-%d').date()
         except:
             print('请输入正确日期')
-            continue
+            return False
         yesterday = datetime.date.today() - datetime.timedelta(days=1)
         if int(get_date[0:4]) < 2017:
             print('最早输入2017年日期')
+            return False
         elif not result1:
             print('日期格式错误')
+            return False
         elif time.mktime(time.strptime(get_date, '%Y-%m-%d')) > time.mktime(time.strptime(str(yesterday), '%Y-%m-%d')):
             print('此日期还未写入数据')
+            return False
         else:
-            print('同步中，请稍候......')
-            break
-    cp = CompareTable(get_date)
+            return True
+    while True:
+        get_date_from = input('请输入要同步的开始日期，格式参考：1996-09-18\n')
+        if judge_date(get_date_from):
+            get_date_to = input('请输入要同步的结束日期，格式参考：1996-09-18\n')
+        else:
+            continue
+        if judge_date(get_date_to):
+            if time.mktime(time.strptime(get_date_from, '%Y-%m-%d')) > time.mktime(time.strptime(get_date_to, '%Y-%m-%d')):
+                print('输入的开始日期大于结束日期')
+                continue
+            else:
+                print('同步中，请稍等')
+                break
+        else:
+            continue
+
+    cp = CompareTable(get_date_from, get_date_to)
     cp.write_excel()
-    print('同步完成，去你的桌面上找“站点.xls”、“营销.xls”、“对比结果.xls”、“站点100以上营销没有的词.xls”')
+    print('抓取完成，去你的桌面上找“营销.xls”、“类似词营销量级低于100.xls”、“站点100以上营销没有的词.xls”')
     time.sleep(3)
